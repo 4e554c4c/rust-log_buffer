@@ -6,6 +6,8 @@ for storing text logs. It does not depend on `std`, but can be used
 with `std::vec::Vec` if desired. It does not depend on anything else
 either.
 
+This is a fork of the original repository by whitequark, intended to make the buffer 1) interior mutable, and 2) thread-safe. 
+
 See the [documentation][doc] for details.
 
 [doc]: https://whitequark.github.io/rust-log_buffer/log_buffer/
@@ -16,8 +18,8 @@ Installation
 To use the _log_buffer_ library in your project, add the following to `Cargo.toml`:
 
 ```toml
-[dependencies]
-log_buffer = "1.0"
+[dependencies.log_buffer]
+git = https://github.com/ESALP/rust-log_buffer.git 
 ```
 
 Usage example

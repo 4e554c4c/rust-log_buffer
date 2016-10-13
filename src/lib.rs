@@ -39,8 +39,12 @@
 //! let mut dmesg = log_buffer::LogBuffer::new(vec![0; 16]);
 //! ```
 
+
 #![no_std]
 #![cfg_attr(feature = "const_fn", feature(const_fn))]
+
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_BOOL_INIT, ATOMIC_USIZE_INIT};
+use core::cell::UnsafeCell;
 
 /// A ring buffer that stores UTF-8 text.
 ///
@@ -48,8 +52,9 @@
 /// e.g. `[u8; N]`, `Vec<[u8]>`, `Box<[u8]>`.
 #[derive(Debug)]
 pub struct LogBuffer<T: AsMut<[u8]>> {
-    buffer:   T,
-    position: usize
+    buffer:   UnsafeCell<T>,
+    position: AtomicUsize,
+	lock: AtomicBool
 }
 
 impl<T: AsMut<[u8]>> LogBuffer<T> {
@@ -57,7 +62,10 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     ///
     /// The buffer is cleared after creation.
     pub fn new(storage: T) -> LogBuffer<T> {
-        let mut buffer = LogBuffer { buffer: storage, position: 0 };
+		let cell = UnsafeCell::new(storage);
+		let l = unsafe{(*cell.get()).as_mut().len()};
+		assert_eq!(0,l & l-1); 
+        let buffer = LogBuffer { buffer: cell, position: ATOMIC_USIZE_INIT, lock: ATOMIC_BOOL_INIT };
         buffer.clear();
         buffer
     }
@@ -72,25 +80,38 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
         LogBuffer { buffer: storage, position: 0 }
     }
 
+	/// Obtains the lock
+	fn obtain_lock(&self) {
+		while self.lock.compare_and_swap(false,true,Ordering::Relaxed) == true {}
+	}
+	fn release_lock(&self) {
+		self.lock.store(false, Ordering::Relaxed);
+	}
+
     /// Clears the buffer.
     ///
     /// Only the text written after clearing will be read out by a future extraction.
     ///
     /// This function takes O(n) time where n is buffer length.
-    pub fn clear(&mut self) {
-        self.position = 0;
-        for b in self.buffer.as_mut().iter_mut() {
+    pub fn clear(&self) {
+		self.obtain_lock();
+		let buffer = unsafe {(*self.buffer.get()).as_mut()};
+        self.position.store(0, Ordering::Relaxed);
+        for b in buffer.iter_mut() {
             // Any non-leading UTF-8 code unit would do, but 0xff looks like an obvious sentinel.
             // Can't be 0x00 since that is a valid codepoint.
             *b = 0xff;
         }
+		self.release_lock();
     }
 
-    fn rotate(&mut self) {
+    fn rotate(&self) {
+		// Assume the lock is obtained, because this method is only used in extract() and extract_lines()
+		// A possibly dangerous assumption
         // We're rearranging the buffer such that the last written byte is at the last possible
         // index; then we skip all the junk at the start, and only valid UTF-8 should remain.
-        let rotate_by = self.position;
-        self.position = 0;
+        let rotate_by = self.position.load(Ordering::Relaxed);
+        self.position.store(0, Ordering::Relaxed);
 
         // The Juggling algorithm
         fn gcd(mut a: usize, mut b: usize) -> usize {
@@ -104,7 +125,7 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
             a
         }
 
-        let buffer = self.buffer.as_mut();
+        let buffer = unsafe{(*self.buffer.get()).as_mut()};
         for i in 0..gcd(buffer.len(), rotate_by) {
           // move i-th values of blocks
           let temp = buffer[i];
@@ -131,8 +152,9 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     /// contents becomes contiguous in memory.
     ///
     /// This function takes O(n) time where n is buffer length.
-    pub fn extract(&mut self) -> &str {
-        self.rotate();
+    pub fn extract(&self) -> &str {
+		self.obtain_lock();
+		self.rotate();
 
         // Skip any non-leading UTF-8 code units at the start.
         fn is_utf8_leader(byte: u8) -> bool {
@@ -142,12 +164,14 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
             byte & 0b11111000 == 0b11110000
         }
 
-        let buffer = self.buffer.as_mut();
+        let buffer = unsafe{(*self.buffer.get()).as_mut()};
         for i in 0..buffer.len() {
             if is_utf8_leader(buffer[i]) {
+				self.release_lock();
                 return core::str::from_utf8(&buffer[i..]).unwrap()
             }
         }
+		self.release_lock();
         return ""
     }
 
@@ -162,15 +186,18 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     ///
     /// This function takes O(n) time where n is buffer length.
     pub fn extract_lines(&mut self) -> core::str::Lines {
-        self.rotate();
+		self.obtain_lock();
+		self.rotate();
 
-        let buffer = self.buffer.as_mut();
+        let buffer = unsafe{ (*self.buffer.get()).as_mut()};
         for i in 0..buffer.len() {
             if i > 0 && buffer[i - 1] == b'\n' {
                 let slice = core::str::from_utf8(&buffer[i..]).unwrap();
-                return slice.lines()
+                self.release_lock();
+				return slice.lines()
             }
         }
+		self.release_lock();
         return "".lines()
     }
 }
@@ -180,9 +207,17 @@ impl<T: AsMut<[u8]>> core::fmt::Write for LogBuffer<T> {
     ///
     /// This function takes O(n) time where n is length of `s`.
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for &b in s.as_bytes() {
-            self.buffer.as_mut()[self.position] = b;
-            self.position = (self.position + 1) % self.buffer.as_mut().len()
+		// wait for a lock that is in process to finish, but do not obtain the lock
+        while self.lock.load(Ordering::Relaxed) == true {}
+		
+		let buffer = unsafe {(*self.buffer.get()).as_mut()}; 
+		let mut write_ind = self.position.fetch_add(s.len(),Ordering::Relaxed);
+		// take the modulo, for powers of two
+		let _ = self.position.fetch_and(buffer.len()-1, Ordering::Relaxed);
+		
+		for &b in s.as_bytes() {
+            buffer[write_ind] = b;
+            write_ind = (write_ind + 1) % buffer.len()
         }
         Ok(())
     }
