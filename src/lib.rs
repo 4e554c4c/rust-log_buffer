@@ -42,7 +42,7 @@
 
 #![no_std]
 #![cfg_attr(feature = "const_fn", feature(const_fn))]
-
+#![feature(const_fn)]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering, ATOMIC_BOOL_INIT, ATOMIC_USIZE_INIT};
 use core::cell::UnsafeCell;
 
@@ -77,7 +77,7 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     /// However, this function can be used in a static initializer.
     #[cfg(feature = "const_fn")]
     pub const fn uninitialized(storage: T) -> LogBuffer<T> {
-        LogBuffer { buffer: storage, position: 0 }
+        LogBuffer { buffer: storage, position: ATOMIC_USIZE_INIT }
     }
 
 	/// Obtains the lock
@@ -202,7 +202,7 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     }
 }
 
-impl<T: AsMut<[u8]>> core::fmt::Write for &LogBuffer<T> {
+impl<'a, T: AsMut<[u8]>> core::fmt::Write for &'a LogBuffer<T> {
     /// Append `s` to the ring buffer.
     ///
     /// This function takes O(n) time where n is length of `s`.
@@ -224,4 +224,5 @@ impl<T: AsMut<[u8]>> core::fmt::Write for &LogBuffer<T> {
 }
 
 // allows the LogBuffer to be used as a static.
-unsafe impl<T> core::marker::Sync for LogBuffer<T> {}
+unsafe impl<T> core::marker::Sync for LogBuffer<T> 	
+	where T: AsMut<[u8]> {}
