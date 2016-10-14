@@ -202,7 +202,7 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     }
 }
 
-impl<T: AsMut<[u8]>> core::fmt::Write for LogBuffer<T> {
+impl<T: AsMut<[u8]>> core::fmt::Write for &LogBuffer<T> {
     /// Append `s` to the ring buffer.
     ///
     /// This function takes O(n) time where n is length of `s`.
@@ -222,3 +222,6 @@ impl<T: AsMut<[u8]>> core::fmt::Write for LogBuffer<T> {
         Ok(())
     }
 }
+
+// allows the LogBuffer to be used as a static.
+unsafe impl<T> core::marker::Sync for LogBuffer<T> {}
