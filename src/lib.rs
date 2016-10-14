@@ -52,9 +52,9 @@ use core::cell::UnsafeCell;
 /// e.g. `[u8; N]`, `Vec<[u8]>`, `Box<[u8]>`.
 #[derive(Debug)]
 pub struct LogBuffer<T: AsMut<[u8]>> {
-    buffer:   UnsafeCell<T>,
-    position: AtomicUsize,
-	lock: AtomicBool
+    pub buffer:   UnsafeCell<T>,
+    pub position: AtomicUsize,
+	pub lock: AtomicBool
 }
 
 impl<T: AsMut<[u8]>> LogBuffer<T> {
