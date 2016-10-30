@@ -19,7 +19,7 @@ To use the _log_buffer_ library in your project, add the following to `Cargo.tom
 
 ```toml
 [dependencies.log_buffer]
-git = https://github.com/ESALP/rust-log_buffer.git 
+git = https://github.com/ESALP/rust-log_buffer.git
 ```
 
 Usage example
