@@ -75,12 +75,20 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     /// The buffer is *not* cleared after creation, and contains whatever is in `storage`.
     /// The `clear()` method should be called before use.
     /// However, this function can be used in a static initializer.
+    ///
+    /// # Safety
+    /// The `storage` passed to this function must have a capacity that is a power of
+    /// two.
     #[cfg(feature = "const_fn")]
-    pub const fn uninitialized(storage: T) -> LogBuffer<T> {
-        LogBuffer { buffer: storage, position: ATOMIC_USIZE_INIT }
+    pub const unsafe fn uninitialized(storage: T) -> LogBuffer<T> {
+        LogBuffer {
+            buffer: UnsafeCell::new(storage),
+            position: ATOMIC_USIZE_INIT,
+            lock: ATOMIC_USIZE_INIT,
+        }
     }
 
-    /// Obtains the lock
+    /// Obtains the lock, can block forever.
     fn obtain_lock(&self) {
         while self.lock.compare_and_swap(false,true,Ordering::Relaxed) == true {}
     }
@@ -106,8 +114,8 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     }
 
     fn rotate(&self) {
-        // Assume the lock is obtained, because this method is only used in extract() and extract_lines()
-        // A possibly dangerous assumption
+        // Make sure that the lock is aquired.
+        assert!(self.lock.load(Ordering::Relaxed));
         // We're rearranging the buffer such that the last written byte is at the last possible
         // index; then we skip all the junk at the start, and only valid UTF-8 should remain.
         let rotate_by = self.position.load(Ordering::Relaxed);
@@ -172,7 +180,7 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
             }
         }
         self.release_lock();
-        return ""
+        ""
     }
 
     /// Extracts the contents of the ring buffer as an iterator over its lines,
@@ -202,6 +210,17 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
     }
 }
 
+// This allows code that owns the LogBuffer to call `Write` functions as well as ones
+// that only have references. This must be done to preserve original functionality and
+// pass the tests.
+impl<T: AsMut<[u8]>> core::fmt::Write for LogBuffer<T> {
+    /// Append `s` to the ring buffer.
+    ///
+    /// This function takes O(n) time where n is the length of `s`
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        (&*self).write_str(s)
+    }
+}
 impl<'a, T: AsMut<[u8]>> core::fmt::Write for &'a LogBuffer<T> {
     /// Append `s` to the ring buffer.
     ///
