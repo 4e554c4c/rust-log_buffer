@@ -119,6 +119,9 @@ impl<T: AsMut<[u8]>> LogBuffer<T> {
         // We're rearranging the buffer such that the last written byte is at the last possible
         // index; then we skip all the junk at the start, and only valid UTF-8 should remain.
         let rotate_by = self.position.load(Ordering::Relaxed);
+        if rotate_by == 0 {
+            return;
+        }
         self.position.store(0, Ordering::Relaxed);
 
         // The Juggling algorithm
